@@ -1,4 +1,12 @@
 services:
+  - type: static_site
+    name: kra-web
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://inov-university-kra.onrender.com
   - type: web
     name: kra-api
     runtime: node
@@ -14,4 +22,4 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: CLIENT_ORIGIN
-        sync: false
+        value: https://inov-university-kra-1.onrender.com
