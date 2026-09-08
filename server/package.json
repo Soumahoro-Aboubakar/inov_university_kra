@@ -2,7 +2,7 @@
   "name": "kra-api",
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "dev": "node --watch src/server.js", "start": "node src/server.js", "seed": "node src/seed.js", "seed:keep": "node src/seed.js --keep" },
+  "scripts": { "dev": "node --watch src/server.js", "start": "node src/server.js", "build": "node --check src/server.js", "seed": "node src/seed.js", "seed:keep": "node src/seed.js --keep" },
    "seed" : "node src/seed.js --reset",
   "dependencies": {
     "bcryptjs": "^2.4.3",
