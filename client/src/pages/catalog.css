@@ -280,6 +280,20 @@
 .user-del-btn {
   margin-left: auto;
 }
+.certification-btn {
+  border: 0;
+  background: transparent;
+  color: #8aa09d;
+  padding: 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+.certification-btn.active,
+.certification-btn:hover {
+  color: #39705e;
+  background: #e8f5ec;
+}
 .delete-btn:hover {
   background: #fff0f0;
   color: #d13030;

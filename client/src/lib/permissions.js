@@ -8,8 +8,8 @@ export const ROLE_LABELS = {
 
 export const ROLES = {
   management: ['principal_admin', 'level_admin'],
-  consultation: ['student', 'local_doctor'],
-  community: ['student', 'local_doctor'],
+  consultation: ['student', 'local_doctor', 'contract_doctor'],
+  community: ['student', 'local_doctor', 'contract_doctor'],
   review: ['principal_admin'],
   catalog: ['principal_admin'],
   communications: ['principal_admin', 'level_admin'],

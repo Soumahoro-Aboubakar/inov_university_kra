@@ -24,7 +24,7 @@ npm run seed
 
 Cette commande efface uniquement les collections gérées par KRA, puis crée un jeu de données relationnel couvrant chaque modèle. Tous les comptes utilisent le mot de passe affiché à la fin de l’exécution. Pour refuser toute réinitialisation si des utilisateurs existent déjà, utilisez `npm run seed:keep` depuis `server/` (ou `npm run seed:keep --prefix server` depuis la racine).
 
-Le premier administrateur principal se crée depuis l’écran d’inscription. Les autres comptes sont ensuite créés par lui via l’API. SMTP, Twilio et Cloudflare R2 sont optionnels : lorsqu’ils ne sont pas configurés, l’API refuse l’envoi plutôt que de prétendre l’avoir effectué.
+Le premier administrateur principal se crée depuis l’écran d’inscription. Les autres comptes sont ensuite créés par lui via l’API. SMTP et Twilio sont optionnels. Les images du forum utilisent Cloudflare Images : renseignez `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` et, si nécessaire, `CLOUDFLARE_IMAGES_HASH` dans `server/.env`; sans cette configuration, une publication contenant une image est refusée clairement.
 
 ## Rôles
 

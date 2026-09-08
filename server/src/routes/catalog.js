@@ -41,9 +41,11 @@ router.post('/levels', allow('principal_admin'), async (req, res) => {
   const data = parse(z.object({
     name: z.string().min(2),
     code: z.string().min(2).optional(),
-    manager: objectId.optional()
+    manager: objectId.optional(),
+    order: z.number().int().nonnegative().optional()
   }), req.body);
   if (!data.code) data.code = await generateCode('level', data.name);
+  if (data.order === undefined) data.order = await Level.countDocuments() + 1;
   res.status(201).json(await Level.create(data));
 });
 
@@ -62,9 +64,14 @@ router.post('/subjects', allow('principal_admin'), async (req, res) => {
   const data = parse(z.object({
     name: z.string().min(2),
     code: z.string().min(2).optional(),
-    doctors: z.array(objectId).min(1, 'Associez au moins un docteur référent à cette matière.')
+    doctors: z.array(objectId).optional(),
+    assignments: z.array(z.object({ level: objectId, doctors: z.array(objectId).min(1) })).optional()
   }), req.body);
   if (!data.code) data.code = await generateCode('subject', data.name);
+  if (!data.doctors?.length && !data.assignments?.length) return res.status(422).json({ message: 'Associez au moins un docteur référent à cette matière.' });
+  const doctorIds = [...new Set([...(data.doctors || []), ...(data.assignments || []).flatMap((assignment) => assignment.doctors)])];
+  const validDoctors = await User.countDocuments({ _id: { $in: doctorIds }, role: { $in: ['local_doctor', 'contract_doctor'] }, active: true });
+  if (validDoctors !== doctorIds.length) return res.status(422).json({ message: 'Chaque affectation doit désigner un docteur actif.' });
   res.status(201).json(await Subject.create(data));
 });
 

@@ -33,6 +33,16 @@ const weekStart = (value) => {
   return date;
 };
 const isPastWeek = (value) => weekStart(value) < weekStart(new Date());
+const isExpired = (session) => new Date(session.endsAt) <= new Date();
+const idOf = (value) => value?._id || value;
+const sessionAuthorId = (session, schedule) => idOf(session.createdBy) || idOf(schedule.createdBy);
+const canModifySession = (session, schedule, user) => {
+  if (isExpired(session)) return false;
+  if (user.role === 'principal_admin') return true;
+  return user.role === 'level_admin'
+    && String(idOf(schedule.level)) === String(idOf(user.level))
+    && String(sessionAuthorId(session, schedule)) === String(user.id);
+};
 const hasSessions = async (schedule) => Session.exists({ schedule: schedule.id });
 const assertEditableWeek = async (schedule, startsAt) => {
   if (isPastWeek(startsAt)) {
@@ -47,9 +57,14 @@ const assertEditableWeek = async (schedule, startsAt) => {
   }
 };
 const load = (id) => Schedule.findById(id).populate('level', 'name code').populate('createdBy', 'firstName lastName role');
-const details = async (schedule, requestedWeekStart) => ({
+const details = async (schedule, requestedWeekStart, user) => ({
   schedule,
-  sessions: await Session.find({ schedule: schedule.id, ...(requestedWeekStart ? { startsAt: { $gte: requestedWeekStart, $lt: new Date(requestedWeekStart.getTime() + 7 * 86400000) } } : {}) }).populate('doctor', 'firstName lastName').populate('room', 'name').populate('subject', 'name code').sort('startsAt'),
+  sessions: (await Session.find({ schedule: schedule.id, ...(requestedWeekStart ? { startsAt: { $gte: requestedWeekStart, $lt: new Date(requestedWeekStart.getTime() + 7 * 86400000) } } : {}) }).populate('doctor', 'firstName lastName').populate('room', 'name').populate('subject', 'name code').populate('createdBy', 'firstName lastName role').populate('updatedBy', 'firstName lastName role').sort('startsAt')).map((session) => ({
+    ...session.toObject(),
+    createdBy: session.createdBy || schedule.createdBy,
+    expired: isExpired(session),
+    canEdit: canModifySession(session, schedule, user),
+  })),
 });
 
 const validateSessionLinks = async (data) => {
@@ -91,6 +106,15 @@ const allScheduleConflicts = async (schedule) => {
 router.get('/', allow('principal_admin', 'level_admin'), async (req, res) => {
   const where = req.user.role === 'level_admin' ? { level: req.user.level } : {};
   const schedules = await Schedule.find(where).populate('level', 'name code').populate('createdBy', 'firstName lastName').sort('-updatedAt');
+  if (req.query.date) {
+    const requestedWeek = weekStart(/^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? `${req.query.date}T12:00:00` : req.query.date);
+    if (Number.isNaN(requestedWeek.getTime())) return res.status(422).json({ message: 'Date de recherche invalide.' });
+    const weekEnd = new Date(requestedWeek);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+    const matchingScheduleIds = await Session.distinct('schedule', { startsAt: { $gte: requestedWeek, $lt: weekEnd } });
+    const matchingIds = new Set(matchingScheduleIds.map((id) => String(id)));
+    schedules.sort((left, right) => Number(matchingIds.has(String(right._id))) - Number(matchingIds.has(String(left._id))));
+  }
   res.json(schedules);
 });
 
@@ -110,7 +134,7 @@ router.get('/:scheduleId', allow('principal_admin', 'level_admin'), async (req, 
   if (req.user.role === 'level_admin' && schedule.level.id !== req.user.level?.toString()) return res.status(403).json({ message: 'Accès non autorisé.' });
   const requestedWeek = req.query.weekStart ? new Date(req.query.weekStart) : null;
   if (requestedWeek && Number.isNaN(requestedWeek.getTime())) return res.status(422).json({ message: 'Semaine invalide.' });
-  res.json(await details(schedule, requestedWeek));
+  res.json(await details(schedule, requestedWeek, req.user));
 });
 
 router.get('/:scheduleId/conflicts', allow('principal_admin', 'level_admin'), async (req, res) => {
@@ -139,7 +163,7 @@ router.post('/:scheduleId/sessions', allow('principal_admin', 'level_admin'), as
     const end = new Date(start.getTime() + duration);
     const found = await findSessionConflicts({ room: data.room, doctor: data.doctor, level: schedule.level, startsAt: start, endsAt: end });
     if (found.length) conflicts.push(...conflictPayload(found, { ...data, level: schedule.level, startsAt: start, endsAt: end }));
-    created.push(await Session.create({ ...data, startsAt: start, endsAt: end, level: schedule.level, schedule: schedule.id, recurrenceGroup: dates.length > 1 ? crypto.randomUUID() : undefined }));
+    created.push(await Session.create({ ...data, startsAt: start, endsAt: end, level: schedule.level, schedule: schedule.id, createdBy: req.user.id, updatedBy: req.user.id, recurrenceGroup: dates.length > 1 ? crypto.randomUUID() : undefined }));
   }
 
   invalidateManualCheck(schedule);
@@ -149,10 +173,14 @@ router.post('/:scheduleId/sessions', allow('principal_admin', 'level_admin'), as
 
 router.patch('/:scheduleId/sessions/:sessionId', allow('principal_admin', 'level_admin'), async (req, res) => {
   const schedule = await Schedule.findById(req.params.scheduleId);
-  if (!schedule || !canEdit(schedule, req.user)) return res.status(403).json({ message: 'Accès non autorisé.' });
+  if (!schedule) return res.status(404).json({ message: 'Emploi du temps introuvable.' });
 
   const current = await Session.findOne({ _id: req.params.sessionId, schedule: schedule.id });
   if (!current) return res.status(404).json({ message: 'Créneau introuvable.' });
+  if (isExpired(current)) return res.status(409).json({ message: 'Ce créneau est déjà expiré et ne peut plus être modifié.' });
+  if (!canModifySession(current, schedule, req.user)) {
+    return res.status(403).json({ message: req.user.role === 'level_admin' ? 'Vous ne pouvez modifier que les créneaux dont vous êtes l’auteur.' : 'Accès non autorisé.' });
+  }
 
   const data = parse(sessionData.partial(), req.body);
   const next = { ...current.toObject(), ...data };
@@ -171,18 +199,29 @@ router.patch('/:scheduleId/sessions/:sessionId', allow('principal_admin', 'level
 
   Object.assign(current, data);
   current.level = schedule.level;
+  current.updatedBy = req.user.id;
   await current.save();
   invalidateManualCheck(schedule);
   await schedule.save();
+  await current.populate([
+    { path: 'doctor', select: 'firstName lastName' },
+    { path: 'room', select: 'name' },
+    { path: 'subject', select: 'name code' },
+    { path: 'createdBy', select: 'firstName lastName role' },
+    { path: 'updatedBy', select: 'firstName lastName role' },
+  ]);
   res.json({ session: current, conflicts: conflictPayload(found, { ...next, level: schedule.level }) });
 });
 
 router.delete('/:scheduleId/sessions/:sessionId', allow('principal_admin', 'level_admin'), async (req, res) => {
   const schedule = await Schedule.findById(req.params.scheduleId);
-  if (!schedule || !canEdit(schedule, req.user)) return res.status(403).json({ message: 'Accès non autorisé.' });
+  if (!schedule) return res.status(404).json({ message: 'Emploi du temps introuvable.' });
   const session = await Session.findOne({ _id: req.params.sessionId, schedule: schedule.id });
   if (!session) return res.status(404).json({ message: 'Créneau introuvable.' });
-  await assertEditableWeek(schedule, session.startsAt);
+  if (isExpired(session)) return res.status(409).json({ message: 'Ce créneau est déjà expiré et ne peut plus être modifié.' });
+  if (!canModifySession(session, schedule, req.user)) {
+    return res.status(403).json({ message: req.user.role === 'level_admin' ? 'Vous ne pouvez modifier que les créneaux dont vous êtes l’auteur.' : 'Accès non autorisé.' });
+  }
   await session.deleteOne();
   invalidateManualCheck(schedule);
   await schedule.save();

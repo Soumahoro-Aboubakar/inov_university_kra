@@ -31,7 +31,7 @@ export const clock = (value) =>
     minute: "2-digit",
   }).format(new Date(value));
 
-export function WeekGrid({ sessions = [], weekStart: requestedWeekStart, focusedSessionId, onSessionDoubleClick, onWeekChange }) {
+export function WeekGrid({ sessions = [], weekStart: requestedWeekStart, highlightedDate, focusedSessionId, onSessionDoubleClick, onWeekChange }) {
   const focusedRef = useRef(null);
   const weekStart = new Date(requestedWeekStart || new Date());
 
@@ -60,14 +60,17 @@ export function WeekGrid({ sessions = [], weekStart: requestedWeekStart, focused
       <div className="schedule-week-wrap">
       <div className="schedule-week-grid">
         <div className="schedule-axis-header">Heures</div>
-        {dayColumns.map((day, index) => (
-          <div className="schedule-day-header" key={day.toISOString()}>
+        {dayColumns.map((day, index) => {
+          const dateKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+          const isHighlighted = dateKey === highlightedDate;
+          return <div className={`schedule-day-header ${isHighlighted ? "highlighted" : ""}`} key={day.toISOString()}>
             <strong>{dayNames[index]}</strong>
             <span>
               {day.getDate()}/{day.getMonth() + 1}
             </span>
-          </div>
-        ))}
+            {isHighlighted && <em>Date recherchée</em>}
+          </div>;
+        })}
 
         <div className="schedule-axis">
           {hourMarks.map((hour) => (
@@ -81,8 +84,10 @@ export function WeekGrid({ sessions = [], weekStart: requestedWeekStart, focused
           const timeline = getDayTimeline(sessions, day.toISOString());
           const height = (GRID_END_HOUR - GRID_START_HOUR + 1) * PIXELS_PER_HOUR;
 
+          const dateKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+          const isHighlighted = dateKey === highlightedDate;
           return (
-            <div className="schedule-day-column" key={day.toISOString()}>
+            <div className={`schedule-day-column ${isHighlighted ? "highlighted" : ""}`} key={day.toISOString()}>
               <div className="schedule-day-timeline" style={{ height }}>
                 {hourMarks.map((hour) => (
                   <div
@@ -109,13 +114,18 @@ export function WeekGrid({ sessions = [], weekStart: requestedWeekStart, focused
                   }
 
                   const item = block.session;
-                  const editable = Boolean(onSessionDoubleClick);
+                  const editable = Boolean(
+                    onSessionDoubleClick
+                    && item.canEdit
+                    && !item.expired
+                    && new Date(item.endsAt) > new Date(),
+                  );
 
                   return (
                     <article
                       key={`${day.toISOString()}-session-${item?._id || index}`}
                       ref={item._id === focusedSessionId ? focusedRef : undefined}
-                      className={`schedule-session ${item.type} ${item._id === focusedSessionId ? "focused" : ""}`}
+                      className={`schedule-session ${item.type} ${editable ? "editable" : ""} ${item._id === focusedSessionId ? "focused" : ""}`}
                       style={{
                         top: `${block.top}px`,
                         height: `${block.height}px`,
@@ -133,7 +143,7 @@ export function WeekGrid({ sessions = [], weekStart: requestedWeekStart, focused
                             }
                           : undefined
                       }
-                      title={editable ? "Double-cliquez pour modifier" : undefined}
+                      title={editable ? "Double-cliquez pour modifier" : item.expired ? "Ce créneau est expiré" : undefined}
                     >
                       <strong>{item.subjectName}</strong>
                       <span>

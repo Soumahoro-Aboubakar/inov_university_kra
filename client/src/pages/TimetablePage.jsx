@@ -1,18 +1,46 @@
 import { useEffect, useState } from "react";
-import { Download, FileSpreadsheet, FileText } from "lucide-react";
+import { CalendarClock, Download, FileSpreadsheet, FileText } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { WeekGrid } from "../components/Timetable";
+import { formatDateInput, getWeekStart } from "../lib/scheduleUtils";
+
 export default function TimetablePage() {
+  const [searchParams] = useSearchParams();
+  const initialDate = searchParams.get("date") || formatDateInput();
   const [sessions, setSessions] = useState([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [searchedDate, setSearchedDate] = useState(initialDate);
+  const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date(`${initialDate}T12:00:00`)));
+
   useEffect(() => {
-    const day = new Date();
-    day.setDate(day.getDate() - ((day.getDay() + 6) % 7));
+    const day = new Date(weekStart);
+    setLoading(true);
+    setError("");
     api
-      .get(`/dashboard/week?start=${day.toISOString()}`)
+      .get(`/dashboard/week?start=${encodeURIComponent(day.toISOString())}`)
       .then(setSessions)
-      .catch((e) => setError(e.message));
-  }, []);
+      .catch((e) => {
+        setSessions([]);
+        setError(e.message);
+      })
+      .finally(() => setLoading(false));
+  }, [weekStart]);
+
+  const searchDate = (value) => {
+    setError("");
+    setSearchedDate(value);
+    if (!value) return;
+    setWeekStart(getWeekStart(new Date(`${value}T12:00:00`)));
+  };
+
+  const shiftWeek = (amount) => {
+    const nextWeek = new Date(weekStart);
+    nextWeek.setDate(nextWeek.getDate() + amount * 7);
+    setWeekStart(nextWeek);
+  };
+
   return (
     <div className="page">
       <header className="page-header">
@@ -23,6 +51,15 @@ export default function TimetablePage() {
             Un affichage interactif, lisible et toujours à jour.
           </p>
         </div>
+        <label className="schedule-date-search">
+          <span>Date recherchée</span>
+          <input
+            type="date"
+            value={searchedDate}
+            onChange={(event) => searchDate(event.target.value)}
+            aria-label="Rechercher une semaine à partir d'une date"
+          />
+        </label>
         <div className="exports">
           <button
             onClick={() =>
@@ -47,11 +84,20 @@ export default function TimetablePage() {
         </div>
       </header>
       {error && <div className="alert error">{error}</div>}
-      <WeekGrid sessions={sessions} />
-      {!sessions.length && (
+      {loading ? <div className="schedule-loading" role="status" aria-live="polite">
+        <span className="schedule-loading-icon"><CalendarClock size={32} /></span>
+        <strong>Chargement des emplois du temps…</strong>
+        <span>Récupération des séances de la semaine</span>
+      </div> : !error && <WeekGrid
+        sessions={sessions}
+        weekStart={weekStart}
+        highlightedDate={searchedDate}
+        onWeekChange={shiftWeek}
+      />}
+      {!loading && !error && !sessions.length && (
         <div className="empty">
           <Download size={25} />
-          <p>Aucune séance publiée cette semaine.</p>
+          <p>Aucun emploi du temps trouvé pour cette période.</p>
         </div>
       )}
     </div>

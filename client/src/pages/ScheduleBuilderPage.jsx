@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
+  CalendarClock,
+  ChevronDown,
+  LockKeyhole,
   Pencil,
   Plus,
   Send,
@@ -11,7 +14,7 @@ import { api } from "../lib/api";
 import { WeekGrid } from "../components/Timetable";
 import { ConflictDetails, getCurrentSessionFacts } from "../components/ConflictDetails";
 import { useAuth } from "../context/AuthContext";
-import { getWeekStart } from "../lib/scheduleUtils";
+import { formatDateInput, getWeekStart } from "../lib/scheduleUtils";
 
 const blank = {
   subjectName: "",
@@ -52,9 +55,11 @@ const fmt = (value) =>
 
 export default function ScheduleBuilderPage() {
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const requestedSchedule = searchParams.get("focus");
   const requestedSession = searchParams.get("focusSession");
+  const requestedDate = searchParams.get("date");
+  const searchedDate = requestedDate || formatDateInput();
   const [catalog, setCatalog] = useState({
     levels: [],
     rooms: [],
@@ -64,7 +69,7 @@ export default function ScheduleBuilderPage() {
   const [schedules, setSchedules] = useState([]);
   const [selected, setSelected] = useState("");
   const [detail, setDetail] = useState(null);
-  const [weekStart, setWeekStart] = useState(getWeekStart());
+  const [weekStart, setWeekStart] = useState(() => getWeekStart(requestedDate ? `${requestedDate}T12:00:00` : new Date()));
   const [focusedSessionId, setFocusedSessionId] = useState(requestedSession || "");
 
   // --- Modal state (remplace l'ancien formulaire empilé) ---
@@ -81,6 +86,8 @@ export default function ScheduleBuilderPage() {
   const [message, setMessage] = useState("");
   const [conflicts, setConflicts] = useState([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
 
   const firstFieldRef = useRef(null);
 
@@ -90,44 +97,59 @@ export default function ScheduleBuilderPage() {
       setConflicts([]);
       return;
     }
-    const [scheduleDetail, conflictData] = await Promise.all([
-      api.get(`/schedules/${scheduleId}?weekStart=${encodeURIComponent(requestedWeek.toISOString())}`),
-      api.get(`/schedules/${scheduleId}/conflicts`),
-    ]);
-    setDetail(scheduleDetail);
-    setConflicts(conflictData.conflicts || []);
+    setLoading(true);
+    try {
+      const [scheduleDetail, conflictData] = await Promise.all([
+        api.get(`/schedules/${scheduleId}?weekStart=${encodeURIComponent(requestedWeek.toISOString())}`),
+        api.get(`/schedules/${scheduleId}/conflicts`),
+      ]);
+      setDetail(scheduleDetail);
+      setConflicts(conflictData.conflicts || []);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const load = async () => {
-    const [c, list] = await Promise.all([
-      api.get("/catalog"),
-      api.get("/schedules"),
-    ]);
-    setCatalog(c);
-    setSchedules(list);
+    setLoading(true);
+    setError("");
+    try {
+      const [c, list] = await Promise.all([
+        api.get("/catalog"),
+        api.get(`/schedules${requestedDate ? `?date=${encodeURIComponent(requestedDate)}` : ""}`),
+      ]);
+      setCatalog(c);
+      setSchedules(list);
 
-    const requestedExists = !requestedSchedule || list.some((schedule) => schedule._id === requestedSchedule);
-    if (!requestedExists) {
-      setSelected("");
-      setDetail(null);
-      setError("L’emploi du temps demandé est introuvable.");
-      return;
-    }
-    const candidate = requestedSchedule || selected || list[0]?._id;
-    if (candidate) {
-      setSelected(candidate);
-      const fullDetail = await api.get(`/schedules/${candidate}`);
-      const focus = fullDetail.sessions.find((session) => session._id === requestedSession) || (requestedSchedule ? fullDetail.sessions[0] : null);
-      const targetWeek = focus ? getWeekStart(focus.startsAt) : getWeekStart();
-      setFocusedSessionId(focus?._id || "");
-      setWeekStart(targetWeek);
-      await refreshDetail(candidate, targetWeek);
+      const requestedExists = !requestedSchedule || list.some((schedule) => schedule._id === requestedSchedule);
+      if (!requestedExists) {
+        setSelected("");
+        setDetail(null);
+        setError("L’emploi du temps demandé est introuvable.");
+        return;
+      }
+      const candidate = requestedSchedule || selected || list[0]?._id;
+      if (candidate) {
+        setSelected(candidate);
+        const fullDetail = await api.get(`/schedules/${candidate}`);
+        const focus = fullDetail.sessions.find((session) => session._id === requestedSession) || (requestedSchedule ? fullDetail.sessions[0] : null);
+        const targetWeek = focus
+          ? getWeekStart(focus.startsAt)
+          : requestedDate
+            ? getWeekStart(`${requestedDate}T12:00:00`)
+            : getWeekStart();
+        setFocusedSessionId(focus?._id || "");
+        setWeekStart(targetWeek);
+        await refreshDetail(candidate, targetWeek);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
-  }, [requestedSchedule, requestedSession]);
+  }, [requestedSchedule, requestedSession, requestedDate]);
 
   const changeWeek = async (offset) => {
     const nextWeek = new Date(weekStart);
@@ -135,6 +157,13 @@ export default function ScheduleBuilderPage() {
     setWeekStart(nextWeek);
     setFocusedSessionId("");
     await refreshDetail(selected, nextWeek);
+  };
+
+  const searchDate = (value) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (value) nextParams.set("date", value);
+    else nextParams.delete("date");
+    setSearchParams(nextParams);
   };
 
   // Fermeture au clavier (Échap) tant que le modal est ouvert
@@ -342,6 +371,15 @@ export default function ScheduleBuilderPage() {
           </p>
         </div>
         <div className="header-actions">
+          <label className="schedule-date-search builder-date-search">
+            <span>Date recherchée</span>
+            <input
+              type="date"
+              value={searchedDate}
+              onChange={(event) => searchDate(event.target.value)}
+              aria-label="Rechercher les emplois du temps à partir d'une date"
+            />
+          </label>
           <select
             value={selected}
             onChange={async (e) => {
@@ -368,7 +406,13 @@ export default function ScheduleBuilderPage() {
       {message && <div className="alert success">{message}</div>}
       {conflicts.length > 0 && !modalOpen && <ConflictDetails conflicts={conflicts} onOpenSchedule={user.role === "principal_admin" ? openConflictingSchedule : undefined} />}
 
-      {selected ? (
+      {loading ? (
+        <div className="schedule-loading" role="status" aria-live="polite">
+          <span className="schedule-loading-icon"><CalendarClock size={32} /></span>
+          <strong>Chargement des emplois du temps…</strong>
+          <span>Récupération des séances de la semaine</span>
+        </div>
+      ) : selected ? (
         <div className="builder-preview" style={{ width: "100%" }}>
           <div className="section-heading">
             <div>
@@ -394,60 +438,91 @@ export default function ScheduleBuilderPage() {
             </div>
           </div>
 
-          <div className="session-list">
-            {detail?.sessions?.map((session) => (
-              <div
-                className="session-row"
-                key={session._id}
-                onDoubleClick={editable ? () => openEdit(session) : undefined}
-                onKeyDown={editable ? (e) => e.key === "Enter" && openEdit(session) : undefined}
-                tabIndex={editable ? 0 : undefined}
-                role={editable ? "button" : undefined}
-                title={editable ? "Double-cliquez pour modifier" : undefined}
-                style={{ cursor: editable ? "pointer" : "default" }}
-              >
-                <div>
-                  <strong>{session.subjectName}</strong>
-                  <span>
-                    {fmt(session.startsAt)} – {fmt(session.endsAt)}
-                    {"  ·  "}
-                    {session.room?.name} {session.doctor?.firstName
-                      ? `· ${session.doctor.firstName} ${session.doctor.lastName}`
-                      : ""}
-                    {"  ·  "}
-                    {typeLabel[session.type] || session.type}
-                  </span>
-                </div>
-                {editable && <div className="session-row-actions">
-                  <button type="button" className="session-edit-button" onClick={() => openEdit(session)} aria-label={`Modifier ${session.subjectName}`} title="Modifier ce créneau">
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeSession(session._id);
-                    }}
+          <section className={`sessions-accordion ${sessionsOpen ? "open" : ""}`}>
+            <button
+              type="button"
+              className="sessions-accordion-toggle"
+              aria-expanded={sessionsOpen}
+              aria-controls="schedule-session-list"
+              onClick={() => setSessionsOpen((isOpen) => !isOpen)}
+            >
+              <span>
+                <strong>Emplois du temps</strong>
+                <small>{detail?.sessions?.length || 0} élément{detail?.sessions?.length === 1 ? "" : "s"}</small>
+              </span>
+              <span className="sessions-accordion-action">
+                {sessionsOpen ? "Masquer" : "Afficher"}
+                <ChevronDown size={18} aria-hidden="true" />
+              </span>
+            </button>
+            <div className="sessions-accordion-content" id="schedule-session-list">
+              <div className="session-list">
+                {detail?.sessions?.map((session) => (
+                  (() => {
+                    const sessionCanEdit = Boolean(session.canEdit);
+                    const sessionExpired = Boolean(session.expired) || new Date(session.endsAt) <= new Date();
+                    return (
+                  <div
+                    className="session-row"
+                    key={session._id}
+                    onDoubleClick={sessionCanEdit ? () => openEdit(session) : undefined}
+                    onKeyDown={sessionCanEdit ? (e) => e.key === "Enter" && openEdit(session) : undefined}
+                    tabIndex={sessionCanEdit ? 0 : undefined}
+                    role={sessionCanEdit ? "button" : undefined}
+                    title={sessionCanEdit ? "Double-cliquez pour modifier" : undefined}
+                    style={{ cursor: sessionCanEdit ? "pointer" : "default" }}
                   >
-                    <Trash2 size={15} /> Supprimer
-                  </button>
-                </div>}
+                    <div>
+                      <strong>{session.subjectName}</strong>
+                      <span>
+                        {fmt(session.startsAt)} – {fmt(session.endsAt)}
+                        {"  ·  "}
+                        {session.room?.name} {session.doctor?.firstName
+                          ? `· ${session.doctor.firstName} ${session.doctor.lastName}`
+                          : ""}
+                        {"  ·  "}
+                        {typeLabel[session.type] || session.type}
+                      </span>
+                    </div>
+                    <div className="session-row-actions">
+                      {sessionCanEdit ? <button type="button" className="session-edit-button" onClick={() => openEdit(session)} aria-label={`Modifier ${session.subjectName}`} title="Modifier ce créneau">
+                        <Pencil size={15} /> Modifier
+                      </button> : <span className={`session-permission ${sessionExpired ? "expired" : "locked"}`}>
+                        <LockKeyhole size={14} /> {sessionExpired ? "Expiré" : "Modification non autorisée"}
+                      </span>}
+                      {editable && sessionCanEdit && <>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeSession(session._id);
+                        }}
+                      >
+                        <Trash2 size={15} /> Supprimer
+                      </button>
+                      </>}
+                    </div>
+                  </div>
+                    );
+                  })()
+                ))}
+                {!detail?.sessions?.length && (
+                  <div className="empty-state">
+                    <p className="muted">Aucune séance pour l'instant.</p>
+                  </div>
+                )}
               </div>
-            ))}
-            {!detail?.sessions?.length && (
-              <div className="empty-state">
-                <p className="muted">Aucune séance pour l'instant.</p>
-              </div>
-            )}
-          </div>
-
+            </div>
+          </section>
+   
           <WeekGrid
             sessions={detail?.sessions || []}
             weekStart={weekStart}
+            highlightedDate={requestedDate}
             focusedSessionId={focusedSessionId}
             onWeekChange={changeWeek}
-            onSessionDoubleClick={editable ? openEdit : undefined}
+            onSessionDoubleClick={openEdit}
           />
         </div>
       ) : (

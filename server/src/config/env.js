@@ -10,5 +10,9 @@ export const env = {
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/kra',
   jwtSecret: process.env.JWT_SECRET || 'development-secret-change-me',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
-  clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173'
+  clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  cloudflareAccountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+  cloudflareApiToken: process.env.CLOUDFLARE_API_TOKEN || '',
+  cloudflareImagesHash: process.env.CLOUDFLARE_IMAGES_HASH || '',
+  twilioStatusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL || ''
 };

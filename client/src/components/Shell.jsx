@@ -34,6 +34,7 @@ export default function Shell() {
       { to: '/community', icon: MessageCircleMore, label: 'Préoccupations' },
     ],
     contract_doctor: [
+      { to: '/community', icon: MessageCircleMore, label: 'Préoccupations' },
       { to: '/contractors', icon: UsersRound, label: 'Mes documents' },
     ],
   };

@@ -6,29 +6,32 @@ import {
   Comment, Communication, ContractorDispatch, Discussion, Level, Notification,
   Room, Schedule, Session, Subject, User
 } from './models/index.js';
+import scheduleData from './seedScheduleData.js';
 
-// Le seed est prévu pour un environnement de développement : il remplace le jeu
-// de données KRA par défaut. --keep permet de vérifier qu'une base est vide.
+// ---------------------------------------------------------------------------
+// Seed basé sur les emplois du temps réels de l'UAO (fichiers
+// Planning_UAO-ST_*.xlsx). Les données de niveaux / matières / séances /
+// enseignants / salles proviennent de ces fichiers et sont importées depuis
+// `seedScheduleData.js` (généré par le script d'extraction, voir
+// `scripts/extractSchedules.mjs` fourni à côté). Les comptes utilisateurs
+// (admins, étudiants) et l'espace communautaire (discussions/communications)
+// n'existent pas dans les fichiers Excel : ils sont générés de façon
+// fictive et cohérente, uniquement pour permettre de tester l'application.
+// ---------------------------------------------------------------------------
+
 const keepExistingData = process.argv.includes('--keep');
-const password = 'KraTest2026!';
-const daysFromToday = (days, hour, minutes = 0, duration = 120) => {
-  const startsAt = new Date();
-  startsAt.setDate(startsAt.getDate() + days);
-  startsAt.setHours(hour, minutes, 0, 0);
-  return { startsAt, endsAt: new Date(startsAt.getTime() + duration * 60_000) };
-};
+const password = 'UaoTest2026!';
 
 const log = (message) => console.log(`  ✓ ${message}`);
 
 async function resetDatabase() {
-  // Child collections are cleared first so this stays safe if references later gain constraints.
   await Promise.all([
     Comment.deleteMany({}), Notification.deleteMany({}), ContractorDispatch.deleteMany({}),
     Communication.deleteMany({}), Discussion.deleteMany({}), Session.deleteMany({}),
     Schedule.deleteMany({}), Subject.deleteMany({}), Room.deleteMany({}),
     User.deleteMany({}), Level.deleteMany({})
   ]);
-  log('Données de test précédentes supprimées');
+  log('Données précédentes supprimées');
 }
 
 async function assertSeedCoverage() {
@@ -39,125 +42,255 @@ async function assertSeedCoverage() {
   console.table(counts);
 }
 
+// --- Utilitaires -----------------------------------------------------------
+
+// Convertit "2026-09-07" + [8, 0] en objet Date local (comme le fait le
+// reste de l'application : setHours en heure locale, sans forcer l'UTC).
+function toDate(isoDay, [hour, minute]) {
+  const [y, m, d] = isoDay.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setHours(hour, minute, 0, 0);
+  return dt;
+}
+
+function slugToTitle(str) {
+  return str.replace(/\s+/g, ' ').trim();
+}
+
+// --- Seed --------------------------------------------------------------
+
 async function seed() {
   await mongoose.connect(env.mongoUri);
   console.log(`\nConnexion MongoDB établie : ${mongoose.connection.name}`);
 
   if (keepExistingData && await User.exists({})) {
-    throw new Error('La base contient déjà des données. Utilisez "npm run seed" pour recréer le jeu de données de test.');
+    throw new Error('La base contient déjà des données. Relancez sans --keep pour recréer le jeu de données.');
   }
   if (!keepExistingData) await resetDatabase();
 
-  console.log('Création des niveaux...');
-  const [licence1, licence2, master1] = await Level.create([
-    { name: 'Licence Informatique — 1re année', code: 'L1-INFO' },
-    { name: 'Licence Informatique — 2e année', code: 'L2-INFO' },
-    { name: 'Master Data & IA — 1re année', code: 'M1-DATA' }
-  ]);
-  log('3 niveaux créés');
+  const { levels: levelDefs, rooms: roomDefs, teachers: teacherDefs, subjects: subjectDefs, sessions: sessionDefs } = scheduleData;
 
+  // 1) Niveaux (7 filières issues des 7 fichiers Excel) -----------------
+  console.log('Création des niveaux (filières UAO-ST)...');
+  const levelDocs = await Level.create(
+    levelDefs.map(({ name, code, order }) => ({ name, code, order }))
+  );
+  const levelByKey = Object.fromEntries(levelDefs.map((l, i) => [l.key, levelDocs[i]]));
+  log(`${levelDocs.length} niveaux créés (${levelDefs.map((l) => l.code).join(', ')})`);
+
+  // 2) Salles ------------------------------------------------------------
+  // Les fichiers Excel ne précisent une salle nommée que pour une minorité
+  // de séances (Amphi MI, Salle informatique, CEMV). Pour toutes les autres,
+  // la ligne "SALLE" ne contient que le lien de la plateforme de gestion des
+  // salles (https://uao.mygrr.net) : une salle générique "à confirmer" est
+  // utilisée dans ce cas plutôt que d'inventer une salle précise.
+  console.log('Création des salles...');
+  const roomDocs = await Room.create(
+    roomDefs.map(({ name, code }) => ({ name, code, location: undefined }))
+  );
+  const roomByKey = Object.fromEntries(roomDefs.map((r, i) => [r.key, roomDocs[i]]));
+  log(`${roomDocs.length} salles créées`);
+
+  // 3) Utilisateurs --------------------------------------------------------
   console.log('Création des comptes utilisateurs...');
   const passwordHash = await bcrypt.hash(password, 12);
-  const users = await User.create([
-    { firstName: 'Aïcha', lastName: 'Diallo', email: 'aicha.diallo@kra.test', phone: '+221770000001', passwordHash, role: 'principal_admin' },
-    { firstName: 'Mamadou', lastName: 'Sarr', email: 'mamadou.sarr@kra.test', phone: '+221770000002', passwordHash, role: 'level_admin', level: licence1._id },
-    { firstName: 'Fatou', lastName: 'Ndiaye', email: 'fatou.ndiaye@kra.test', phone: '+221770000003', passwordHash, role: 'level_admin', level: licence2._id },
-    { firstName: 'Ibrahima', lastName: 'Ba', email: 'ibrahima.ba@kra.test', phone: '+221770000004', passwordHash, role: 'level_admin', level: master1._id },
-    { firstName: 'Nora', lastName: 'Mbaye', email: 'nora.mbaye@kra.test', phone: '+221770000101', passwordHash, role: 'local_doctor' },
-    { firstName: 'Thomas', lastName: 'Fall', email: 'thomas.fall@kra.test', phone: '+221770000102', passwordHash, role: 'local_doctor' },
-    { firstName: 'Sokhna', lastName: 'Diop', email: 'sokhna.diop@kra.test', phone: '+221770000103', passwordHash, role: 'local_doctor' },
-    { firstName: 'Claire', lastName: 'Moreau', email: 'claire.moreau@kra.test', phone: '+33610000001', passwordHash, role: 'contract_doctor' },
-    { firstName: 'Julien', lastName: 'Martin', email: 'julien.martin@kra.test', phone: '+33610000002', passwordHash, role: 'contract_doctor' },
-    { firstName: 'Mariam', lastName: 'Kane', email: 'mariam.kane@etu.kra.test', phone: '+221781000001', passwordHash, role: 'student', level: licence1._id },
-    { firstName: 'Ousmane', lastName: 'Cissé', email: 'ousmane.cisse@etu.kra.test', phone: '+221781000002', passwordHash, role: 'student', level: licence1._id },
-    { firstName: 'Élodie', lastName: 'Faye', email: 'elodie.faye@etu.kra.test', phone: '+221781000003', passwordHash, role: 'student', level: licence2._id },
-    { firstName: 'Cheikh', lastName: 'Sy', email: 'cheikh.sy@etu.kra.test', phone: '+221781000004', passwordHash, role: 'student', level: master1._id }
-  ]);
-  const [principal, managerL1, managerL2, managerM1, doctorMath, doctorAlgo, doctorData, contractorClaire, contractorJulien, studentMariam, studentOusmane, studentElodie, studentCheikh] = users;
-  await Promise.all([
-    Level.findByIdAndUpdate(licence1, { manager: managerL1._id }), Level.findByIdAndUpdate(licence2, { manager: managerL2._id }), Level.findByIdAndUpdate(master1, { manager: managerM1._id })
-  ]);
-  log('13 utilisateurs créés, dont les 5 rôles');
 
-  console.log('Création des salles et matières...');
-  const [amphiA, amphiB, room201, labInfo, room402] = await Room.create([
-    { name: 'Amphithéâtre A', capacity: 220, location: 'Bâtiment Sciences, RDC' },
-    { name: 'Amphithéâtre B', capacity: 160, location: 'Bâtiment Sciences, RDC' },
-    { name: 'Salle 201', capacity: 48, location: 'Bâtiment Sciences, 2e étage' },
-    { name: 'Laboratoire informatique', capacity: 32, location: 'Bâtiment Numérique, 1er étage' },
-    { name: 'Salle 402', capacity: 36, location: 'Bâtiment Sciences, 4e étage' }
-  ]);
-  const [analysis, algorithms, databases, statistics, machineLearning, networks] = await Subject.create([
-    { name: 'Analyse mathématique', code: 'MATH101', doctors: [doctorMath._id] },
-    { name: 'Algorithmique avancée', code: 'INFO201', doctors: [doctorAlgo._id] },
-    { name: 'Bases de données', code: 'INFO202', doctors: [doctorAlgo._id] },
-    { name: 'Statistiques appliquées', code: 'STAT301', doctors: [doctorMath._id] },
-    { name: 'Apprentissage automatique', code: 'IA401', doctors: [doctorData._id, contractorClaire._id] },
-    { name: 'Réseaux informatiques', code: 'NET201', doctors: [contractorJulien._id] }
-  ]);
-  log('5 salles et 6 matières créées');
+  const principal = await User.create({
+    firstName: 'Admin', lastName: 'Principal', email: 'admin.principal@uao-st.test',
+    passwordHash, role: 'principal_admin'
+  });
 
-  console.log('Création des propositions et emplois du temps...');
-  const [scheduleL1, scheduleL2, scheduleM1, returnedSchedule, draftSchedule] = await Schedule.create([
-    { level: licence1._id, createdBy: managerL1._id, status: 'published', externalCheck: { checked: true, notes: 'Réservations externes vérifiées auprès de la régie.', checkedBy: principal._id, checkedAt: new Date() }, submittedAt: new Date(), publishedAt: new Date() },
-    { level: licence2._id, createdBy: managerL2._id, status: 'published', externalCheck: { checked: true, notes: 'Aucune réservation extérieure signalée.', checkedBy: principal._id, checkedAt: new Date() }, submittedAt: new Date(), publishedAt: new Date() },
-    { level: master1._id, createdBy: managerM1._id, status: 'submitted', submittedAt: new Date() },
-    { level: licence1._id, createdBy: managerL1._id, status: 'returned', submittedAt: new Date() },
-    { level: licence2._id, createdBy: managerL2._id, status: 'draft' }
-  ]);
-  const recurring = 'l1-algorithmique-semaine-a';
-  await Session.create([
-    { subject: analysis._id, subjectName: analysis.name, doctor: doctorMath._id, room: amphiA._id, level: licence1._id, schedule: scheduleL1._id, type: 'course', ...daysFromToday(1, 8, 0) },
-    { subject: algorithms._id, subjectName: algorithms.name, doctor: doctorAlgo._id, room: room201._id, level: licence1._id, schedule: scheduleL1._id, type: 'tutorial', recurrenceGroup: recurring, ...daysFromToday(1, 10, 30, 90) },
-    { subject: algorithms._id, subjectName: algorithms.name, doctor: doctorAlgo._id, room: room201._id, level: licence1._id, schedule: scheduleL1._id, type: 'tutorial', recurrenceGroup: recurring, ...daysFromToday(3, 10, 30, 90) },
-    { subject: databases._id, subjectName: databases.name, doctor: doctorAlgo._id, room: labInfo._id, level: licence1._id, schedule: scheduleL1._id, type: 'lab', ...daysFromToday(2, 14, 0, 180) },
-    { subject: statistics._id, subjectName: statistics.name, doctor: doctorMath._id, room: amphiB._id, level: licence2._id, schedule: scheduleL2._id, type: 'course', ...daysFromToday(1, 14, 0) },
-    { subject: networks._id, subjectName: networks.name, doctor: contractorJulien._id, room: room402._id, level: licence2._id, schedule: scheduleL2._id, type: 'course', ...daysFromToday(2, 9, 0) },
-    { subject: databases._id, subjectName: databases.name, doctor: doctorAlgo._id, room: labInfo._id, level: licence2._id, schedule: scheduleL2._id, type: 'exam', ...daysFromToday(4, 8, 0, 180) },
-    { subject: machineLearning._id, subjectName: machineLearning.name, doctor: doctorData._id, room: room402._id, level: master1._id, schedule: scheduleM1._id, type: 'course', ...daysFromToday(1, 9, 0) },
-    { subject: machineLearning._id, subjectName: machineLearning.name, doctor: contractorClaire._id, room: labInfo._id, level: master1._id, schedule: scheduleM1._id, type: 'lab', ...daysFromToday(3, 14, 0, 180) },
-    { subject: statistics._id, subjectName: statistics.name, doctor: doctorMath._id, room: amphiB._id, level: licence1._id, schedule: returnedSchedule._id, type: 'quiz', ...daysFromToday(6, 8, 0, 60) },
-    { subject: networks._id, subjectName: 'Atelier de configuration réseau', doctor: contractorJulien._id, room: labInfo._id, level: licence2._id, schedule: draftSchedule._id, type: 'other', ...daysFromToday(6, 10, 0, 120) }
-  ]);
-  log('5 emplois du temps et 11 séances sans conflit de salle créés');
+  // Un compte "level_admin" fictif par niveau (aucune info de ce type dans
+  // les fichiers Excel).
+  const levelAdmins = {};
+  for (const l of levelDefs) {
+    const [firstName, ...rest] = l.code.split('-');
+    levelAdmins[l.key] = await User.create({
+      firstName: 'Responsable', lastName: l.code, email: `responsable.${l.code.toLowerCase()}@uao-st.test`,
+      passwordHash, role: 'level_admin', level: levelByKey[l.key]._id
+    });
+  }
+  await Promise.all(levelDefs.map((l) => Level.findByIdAndUpdate(levelByKey[l.key]._id, { manager: levelAdmins[l.key]._id })));
+  log(`1 admin principal + ${levelDefs.length} responsables de niveau créés`);
 
-  console.log('Création de l’espace de préoccupations...');
-  const [questionAlgo, questionMath, questionMl] = await Discussion.create([
-    { subject: algorithms._id, author: studentMariam._id, text: 'Pourquoi la complexité de la recherche dichotomique est-elle logarithmique ? Je bloque sur l’intuition derrière la division de l’intervalle.', notifiedDoctors: [doctorAlgo._id] },
-    { subject: analysis._id, author: studentOusmane._id, text: 'Pouvez-vous préciser la différence entre la continuité et la dérivabilité avec un contre-exemple simple ?', notifiedDoctors: [doctorMath._id] },
-    { subject: machineLearning._id, author: studentCheikh._id, text: 'Dans quel cas faut-il privilégier la validation croisée plutôt qu’une séparation entraînement/test classique ?', notifiedDoctors: [doctorData._id, contractorClaire._id] }
-  ]);
-  const answerAlgo = await Comment.create({ discussion: questionAlgo._id, author: doctorAlgo._id, text: 'À chaque étape, on élimine la moitié des valeurs possibles. Le nombre d’étapes nécessaires est donc le nombre de fois où l’on peut diviser n par deux avant d’atteindre 1 : log₂(n).', certified: true, accepted: true });
-  await Comment.create([
-    { discussion: questionAlgo._id, author: studentElodie._id, parent: answerAlgo._id, text: 'Cette explication avec la taille de l’intervalle m’aide beaucoup, merci !' },
-    { discussion: questionMath._id, author: studentMariam._id, text: 'Je crois comprendre : dérivable implique continue, mais l’inverse n’est pas toujours vrai.' },
-    { discussion: questionMath._id, author: doctorMath._id, text: 'Exact. La fonction valeur absolue est continue en 0, mais elle n’y est pas dérivable car ses pentes à gauche et à droite diffèrent.', certified: true, accepted: true },
-    { discussion: questionMl._id, author: doctorData._id, text: 'La validation croisée est utile quand le jeu de données est limité : elle réutilise mieux les observations tout en fournissant une estimation plus robuste.', certified: true }
-  ]);
-  log('3 questions et 5 commentaires, dont réponses certifiées et imbriquées, créés');
+  // Enseignants extraits des colonnes "ENSEIGNANT" des emplois du temps.
+  // Le fichier Excel ne distingue pas enseignant permanent ("local_doctor")
+  // et vacataire ("contract_doctor") : tous sont importés en tant que
+  // "local_doctor" par défaut (à ajuster manuellement si besoin). Les
+  // libellés génériques "UP Mathématiques / UP Informatique / UP Physique"
+  // (Unité Pédagogique, créneau non encore affecté à un enseignant nommé)
+  // sont importés comme des comptes "enseignant" placeholders, au même
+  // titre que les enseignants nommés, sans invention d'identité.
+  const teacherDocs = await User.create(
+    teacherDefs.map((t) => ({
+      firstName: t.firstName, lastName: t.lastName, email: t.email,
+      passwordHash, role: 'local_doctor', certified: true
+    }))
+  );
+  const teacherByKey = Object.fromEntries(teacherDefs.map((t, i) => [t.key, teacherDocs[i]]));
+  log(`${teacherDocs.length} enseignants créés à partir des emplois du temps`);
 
-  console.log('Création des communications et envois vacataires...');
-  await Communication.create([
-    { channel: 'sms', sender: principal._id, recipients: [studentMariam._id, studentOusmane._id], audience: 'level_students', body: 'Le TD d’algorithmique de lundi est maintenu en salle 201 à 10h30.', status: 'sent' },
-    { channel: 'email', sender: principal._id, recipients: [doctorMath._id, doctorAlgo._id, doctorData._id], audience: 'all_doctors', subject: 'Réunion pédagogique du semestre', body: 'La réunion de coordination aura lieu vendredi à 15h en salle 402.', status: 'sent' },
-    { channel: 'sms', sender: managerL2._id, recipients: [studentElodie._id], audience: 'level_students', body: 'Rappel : apportez votre carte étudiante pour l’examen de bases de données.', status: 'failed', error: 'Fournisseur SMS indisponible : délai de réponse dépassé.' }
-  ]);
-  await ContractorDispatch.create([
-    { recipient: contractorClaire._id, email: contractorClaire.email, subject: 'Convention d’enseignement — Apprentissage automatique', file: { name: 'convention-claire-moreau.pdf', mime: 'application/pdf', data: Buffer.from('%PDF-1.4\nDocument de test : convention signée de Claire Moreau.') }, sentBy: principal._id, sentAt: new Date() },
-    { recipient: contractorJulien._id, email: contractorJulien.email, subject: 'Planning de cours — Réseaux informatiques', file: { name: 'planning-julien-martin.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data: Buffer.from('Fichier de test : planning réseaux de Julien Martin.') }, sentBy: principal._id, sentAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-  ]);
-  await Notification.create([
-    { recipient: doctorAlgo._id, type: 'new_discussion', message: 'Nouvelle question en Algorithmique avancée', link: `/community/${questionAlgo._id}` },
-    { recipient: doctorMath._id, type: 'new_discussion', message: 'Nouvelle question en Analyse mathématique', link: `/community/${questionMath._id}`, readAt: new Date() },
-    { recipient: contractorClaire._id, type: 'new_discussion', message: 'Nouvelle question en Apprentissage automatique', link: `/community/${questionMl._id}` },
-    { recipient: studentMariam._id, type: 'answer_accepted', message: 'Une réponse validée est disponible pour votre question.', link: `/community/${questionAlgo._id}`, readAt: new Date() }
-  ]);
-  log('3 communications, 2 envois vacataires et 4 notifications créés');
+  // Quelques étudiants fictifs par niveau, pour pouvoir tester les
+  // fonctionnalités côté étudiant (non présents dans les fichiers Excel).
+  const students = {};
+  let studentCounter = 0;
+  for (const l of levelDefs) {
+    students[l.key] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      studentCounter += 1;
+      const student = await User.create({
+        firstName: `Etudiant${i}`, lastName: l.code, email: `etudiant${studentCounter}.${l.code.toLowerCase()}@etu.uao-st.test`,
+        passwordHash, role: 'student', level: levelByKey[l.key]._id
+      });
+      students[l.key].push(student);
+    }
+  }
+  log(`${studentCounter} étudiants fictifs créés (3 par niveau)`);
+
+  // 4) Matières ------------------------------------------------------------
+  // Les assignations enseignant <-> matière <-> niveau sont déduites
+  // directement des colonnes ENSEIGNANT des emplois du temps (regroupées
+  // par matière et par niveau), et non inventées.
+  console.log('Création des matières...');
+  const assignmentsBySubject = new Map(); // subjectKey -> Map(levelKey -> Set(teacherKey))
+  for (const s of sessionDefs) {
+    if (!s.subjectKey) continue;
+    if (!assignmentsBySubject.has(s.subjectKey)) assignmentsBySubject.set(s.subjectKey, new Map());
+    const byLevel = assignmentsBySubject.get(s.subjectKey);
+    if (!byLevel.has(s.level)) byLevel.set(s.level, new Set());
+    s.teacherKeys.forEach((tk) => byLevel.get(s.level).add(tk));
+  }
+
+  const subjectDocsBySource = [];
+  for (const subj of subjectDefs) {
+    const byLevel = assignmentsBySubject.get(subj.key) || new Map();
+    const assignments = [...byLevel.entries()].map(([levelKey, teacherSet]) => ({
+      level: levelByKey[levelKey]._id,
+      doctors: [...teacherSet].map((tk) => teacherByKey[tk]._id)
+    }));
+    const allDoctors = [...new Set(assignments.flatMap((a) => a.doctors.map(String)))].map((id) => new mongoose.Types.ObjectId(id));
+    subjectDocsBySource.push({ name: slugToTitle(subj.name), code: subj.code, doctors: allDoctors, assignments });
+  }
+  const subjectDocs = await Subject.create(subjectDocsBySource);
+  const subjectByKey = Object.fromEntries(subjectDefs.map((s, i) => [s.key, subjectDocs[i]]));
+  log(`${subjectDocs.length} matières créées à partir des emplois du temps`);
+
+  // 5) Emplois du temps (Schedule) : un par niveau et par semestre --------
+  console.log('Création des emplois du temps (par niveau et par semestre)...');
+  const sessionsByLevelSemester = new Map(); // "levelKey-semester" -> sessions[]
+  for (const s of sessionDefs) {
+    const k = `${s.level}-${s.semester}`;
+    if (!sessionsByLevelSemester.has(k)) sessionsByLevelSemester.set(k, []);
+    sessionsByLevelSemester.get(k).push(s);
+  }
+
+  const scheduleByLevelSemester = {};
+  for (const l of levelDefs) {
+    for (const semester of [1, 2]) {
+      const key = `${l.key}-${semester}`;
+      const hasSessions = (sessionsByLevelSemester.get(key) || []).length > 0;
+      // M2 (BDGL / EDP-ANO) semestre 2 est réservé au stage / mémoire dans
+      // les fichiers Excel fournis : aucune séance n'y est planifiée, le
+      // planning correspondant reste donc à l'état "draft".
+      const schedule = await Schedule.create({
+        level: levelByKey[l.key]._id,
+        createdBy: levelAdmins[l.key]._id,
+        status: hasSessions ? 'published' : 'draft',
+        ...(hasSessions ? {
+          externalCheck: { checked: true, notes: 'Emploi du temps importé depuis le fichier Excel officiel UAO-ST.', checkedBy: principal._id, checkedAt: new Date() },
+          submittedAt: new Date(),
+          publishedAt: new Date()
+        } : {})
+      });
+      scheduleByLevelSemester[key] = schedule;
+    }
+  }
+  log(`${Object.keys(scheduleByLevelSemester).length} emplois du temps créés (${levelDefs.length} niveaux x 2 semestres)`);
+
+  // 6) Séances (Session) ---------------------------------------------------
+  // Une séance = une case (jour x créneau) d'un emploi du temps Excel.
+  // Les créneaux "Férié"/"Férie" (jours fériés) ont été exclus lors de
+  // l'extraction, de même que les blocs de calendrier d'examens (dates
+  // globales, sans détail jour/matière/enseignant/salle exploitable).
+  console.log('Création des séances à partir des emplois du temps Excel...');
+  const BATCH = 500;
+  let created = 0;
+  for (let i = 0; i < sessionDefs.length; i += BATCH) {
+    const batch = sessionDefs.slice(i, i + BATCH).map((s) => {
+      const schedule = scheduleByLevelSemester[`${s.level}-${s.semester}`];
+      const doctorIds = s.teacherKeys.length
+        ? s.teacherKeys.map((tk) => teacherByKey[tk]._id)
+        : [levelAdmins[s.level]._id]; // filet de sécurité : ne devrait pas arriver, aucun enseignant listé
+      return {
+        subject: s.subjectKey ? subjectByKey[s.subjectKey]._id : undefined,
+        subjectName: s.subjectName,
+        doctor: doctorIds[0],
+        room: roomByKey[s.roomKey]._id,
+        level: levelByKey[s.level]._id,
+        schedule: schedule._id,
+        createdBy: schedule.createdBy,
+        updatedBy: schedule.createdBy,
+        type: s.type,
+        startsAt: toDate(s.date, s.start),
+        endsAt: toDate(s.date, s.end)
+      };
+    });
+    await Session.create(batch);
+    created += batch.length;
+  }
+  log(`${created} séances créées (issues des 7 fichiers Excel, S1 + S2)`);
+
+  // 7) Espace de préoccupations (communauté) -------------------------------
+  // Non présent dans les fichiers Excel : quelques échanges fictifs sont
+  // générés pour permettre de tester la fonctionnalité, en s'appuyant sur
+  // les vraies matières et les vrais enseignants importés.
+  console.log('Création de l’espace de préoccupations (données fictives de test)...');
+  const sampleSubject = subjectDocs[0];
+  const sampleLevelKey = levelDefs[0].key;
+  const sampleTeacherId = sampleSubject.doctors[0] || teacherDocs[0]._id;
+  const sampleStudent = students[sampleLevelKey][0];
+  const discussion = await Discussion.create({
+    subject: sampleSubject._id, level: levelByKey[sampleLevelKey]._id, author: sampleStudent._id,
+    title: `Question sur ${sampleSubject.name}`,
+    text: `Pourriez-vous revenir sur un point de "${sampleSubject.name}" abordé en cours ? Je souhaiterais un éclaircissement supplémentaire.`,
+    notifiedDoctors: [sampleTeacherId]
+  });
+  const answer = await Comment.create({
+    discussion: discussion._id, author: sampleTeacherId,
+    text: 'Bonne question, je reprends ce point en détail lors de la prochaine séance de TD.',
+    certified: true, accepted: true
+  });
+  await Comment.create({
+    discussion: discussion._id, author: sampleStudent._id, parent: answer._id,
+    text: 'Merci beaucoup pour cette précision !'
+  });
+  log('1 question et 2 commentaires créés (espace communauté)');
+
+  // 8) Communications et envois vacataires ---------------------------------
+  console.log('Création des communications et envois vacataires (données fictives de test)...');
+  await Communication.create({
+    channel: 'sms', sender: levelAdmins[sampleLevelKey]._id,
+    recipients: students[sampleLevelKey].map((s) => s._id), audience: 'level_students',
+    body: `Rappel : l'emploi du temps du niveau ${levelDefs[0].code} vient d'être publié.`,
+    totalRecipients: students[sampleLevelKey].length, successfulCount: students[sampleLevelKey].length,
+    status: 'sent'
+  });
+  await ContractorDispatch.create({
+    recipient: teacherDocs[0]._id, email: teacherDocs[0].email,
+    subject: 'Planning de cours — emploi du temps UAO-ST',
+    file: { name: 'planning.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data: Buffer.from('Fichier de test : planning transmis à l’enseignant.') },
+    sentBy: principal._id, sentAt: new Date()
+  });
+  await Notification.create({
+    recipient: sampleTeacherId, type: 'new_discussion',
+    message: `Nouvelle question en ${sampleSubject.name}`, link: `/community/${discussion._id}`
+  });
+  log('1 communication, 1 envoi vacataire et 1 notification créés');
 
   await assertSeedCoverage();
-  console.log(`\nSeed terminé. Mot de passe de tous les comptes : ${password}\n`);
+  console.log(`\nSeed terminé. Mot de passe de tous les comptes générés : ${password}\n`);
 }
 
 seed()
-  .catch((error) => { console.error('\nÉchec du seed :', error.message); process.exitCode = 1; })
+  .catch((error) => { console.error('\nÉchec du seed :', error); process.exitCode = 1; })
   .finally(async () => { await mongoose.disconnect(); console.log('Connexion MongoDB fermée.'); });

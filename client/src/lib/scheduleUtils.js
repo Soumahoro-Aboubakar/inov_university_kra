@@ -25,6 +25,11 @@ export const getWeekStart = (value = new Date()) => {
   return date;
 };
 
+export const formatDateInput = (value = new Date()) => {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
 export const getWeekEnd = (value = new Date()) => {
   const end = getWeekStart(value);
   end.setDate(end.getDate() + 7);

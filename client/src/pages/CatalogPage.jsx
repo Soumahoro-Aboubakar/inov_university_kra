@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Plus, UsersRound, BookOpen, MapPin, Layers, X, CheckCircle2, AlertCircle, Trash2, RefreshCw, Sparkles } from "lucide-react";
+import { Plus, UsersRound, BookOpen, MapPin, Layers, X, CheckCircle2, AlertCircle, Trash2, RefreshCw, Sparkles, BadgeCheck } from "lucide-react";
 import "./catalog.css";
 import { api } from "../lib/api";
 
@@ -103,6 +103,11 @@ export default function CatalogPage() {
     }
   };
 
+  const toggleCertification = async (user) => {
+    try { await api.patch(`/users/${user._id}/certification`, { certified: !user.certified }); load(); }
+    catch (event) { setError(event.message); }
+  };
+
   const openForm = (type) => {
     setError("");
     setMessage("");
@@ -156,6 +161,7 @@ export default function CatalogPage() {
               <strong>{u.firstName} {u.lastName}</strong>
               <span>{u.email}</span>
               <span className="role-tag">{u.role}</span>
+              {['local_doctor', 'contract_doctor'].includes(u.role) && <button className={`certification-btn ${u.certified ? 'active' : ''}`} onClick={() => toggleCertification(u)} title={u.certified ? 'Retirer la certification' : 'Certifier ce docteur'}><BadgeCheck size={15} /></button>}
               <button className="delete-btn user-del-btn" onClick={() => remove(`/users/${u._id}`)} title="Supprimer"><Trash2 size={15} /></button>
             </div>
           ))}
@@ -224,6 +230,7 @@ export default function CatalogPage() {
                 nameLabel="Nom de la matière"
                 extraFields={[]}
                 doctors={catalog.doctors}
+                levels={catalog.levels}
                 onSubmit={(data) => create("/catalog/subjects", data)}
                 loading={loading}
                 key="subject"
@@ -243,9 +250,10 @@ export default function CatalogPage() {
 /* ──────────────────────────────────────────────
    Composant CodeForm — avec génération auto du code
    ────────────────────────────────────────────── */
-function CodeForm({ type, nameLabel, extraFields, doctors, onSubmit, loading }) {
+function CodeForm({ type, nameLabel, extraFields, doctors, levels, onSubmit, loading }) {
   const [name, setName] = useState("");
   const [extras, setExtras] = useState({});
+  const [assignments, setAssignments] = useState({});
   const codeGen = useCodeGenerator(type);
 
   // Debounce : générer le code 500ms après la dernière frappe sur le nom
@@ -258,9 +266,11 @@ function CodeForm({ type, nameLabel, extraFields, doctors, onSubmit, loading }) 
   const handleSubmit = (e) => {
     e.preventDefault();
     const data = { name, code: codeGen.code, ...extras };
+    if (type === "subject" && levels?.length) data.assignments = Object.entries(assignments).filter(([, selectedDoctors]) => selectedDoctors.length).map(([level, selectedDoctors]) => ({ level, doctors: selectedDoctors }));
     onSubmit(data);
     setName("");
     setExtras({});
+    setAssignments({});
     codeGen.reset();
   };
 
@@ -321,7 +331,8 @@ function CodeForm({ type, nameLabel, extraFields, doctors, onSubmit, loading }) 
         </div>
       ))}
 
-      {doctors && <div className="form-group"><label>Docteur(s) référent(s) <span className="req">*</span></label><select required multiple value={extras.doctors || []} onChange={selectDoctors}>{doctors.map((doctor) => <option key={doctor._id} value={doctor._id}>{doctor.firstName} {doctor.lastName}</option>)}</select><span className="code-hint">Maintenez Ctrl/Cmd pour sélectionner plusieurs docteurs.</span></div>}
+      {doctors && !levels?.length && <div className="form-group"><label>Docteur(s) référent(s) <span className="req">*</span></label><select required multiple value={extras.doctors || []} onChange={selectDoctors}>{doctors.map((doctor) => <option key={doctor._id} value={doctor._id}>{doctor.firstName} {doctor.lastName}</option>)}</select><span className="code-hint">Maintenez Ctrl/Cmd pour sélectionner plusieurs docteurs.</span></div>}
+      {doctors && levels?.length && <div className="assignment-fields"><label>Affectations niveau + docteurs <span className="req">*</span></label>{levels.map((level) => <select key={level._id} multiple value={assignments[level._id] || []} onChange={(event) => setAssignments({ ...assignments, [level._id]: [...event.target.selectedOptions].map((option) => option.value) })}><option value="" disabled>{level.name}</option>{doctors.map((doctor) => <option key={doctor._id} value={doctor._id}>{doctor.firstName} {doctor.lastName}</option>)}</select>)}<span className="code-hint">Chaque liste associe les docteurs sélectionnés au niveau affiché.</span></div>}
 
       <button className="primary wide" disabled={loading || !codeGen.code}>
         {loading ? "Enregistrement..." : "Enregistrer"}
