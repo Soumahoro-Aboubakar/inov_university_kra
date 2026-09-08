@@ -1,6 +1,7 @@
 const request = async (path, options = {}) => {
   const token = localStorage.getItem("kra-token");
-  const response = await fetch(`/api${path}`, {
+  const apiBaseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+  const response = await fetch(`${apiBaseUrl}/api${path}`, {
     ...options,
     headers: {
       ...(options.body instanceof FormData
@@ -11,7 +12,10 @@ const request = async (path, options = {}) => {
     },
   });
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : {};
     const error = new Error(data.message || "Une erreur est survenue.");
     error.payload = data;
     throw error;
