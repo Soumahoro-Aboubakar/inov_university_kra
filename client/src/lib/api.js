@@ -12,7 +12,9 @@ const readResponse = async (response) => {
 
 const request = async (path, options = {}) => {
   const token = localStorage.getItem("kra-token");
-  const apiBaseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+  const apiBaseUrl = (
+    import.meta.env.VITE_API_URL || "https://inov-university-kra.onrender.com"
+  ).replace(/\/$/, "");
   const response = await fetch(`${apiBaseUrl}/api${path}`, {
     ...options,
     headers: {
