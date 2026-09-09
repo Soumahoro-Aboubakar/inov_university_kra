@@ -13,7 +13,13 @@ export function AuthProvider({ children }) {
       .catch(() => localStorage.removeItem("kra-token"))
       .finally(() => setReady(true));
   }, []);
-  const login = ({ token, user }) => {
+  const login = (session) => {
+    if (!session?.token || !session?.user) {
+      throw new Error(
+        "La réponse de connexion est invalide. Vérifiez que l'API de production renvoie bien un token.",
+      );
+    }
+    const { token, user } = session;
     localStorage.setItem("kra-token", token);
     setUser(user);
   };
